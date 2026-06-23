@@ -4,7 +4,7 @@ import numpy as np
 import joblib
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 from streamlit_geolocation import streamlit_geolocation
 from deep_translator import GoogleTranslator
 
@@ -21,9 +21,7 @@ api_lang_codes = {
 
 @st.cache_data(show_spinner=False)
 def _t(text, target_lang):
-    """Translates text dynamically and caches the result for speed."""
-    if target_lang == 'English' or not text:
-        return text
+    if target_lang == 'English' or not text: return text
     try:
         lang_code = api_lang_codes.get(target_lang, 'en')
         return GoogleTranslator(source='auto', target=lang_code).translate(text)
@@ -31,17 +29,13 @@ def _t(text, target_lang):
         return text 
 
 def _t_num(num_str, target_lang):
-    """Instantly converts numbers to native digits without API lag."""
     num_str = str(num_str)
     if target_lang == 'English': return num_str
-    
     devnagari = str.maketrans('0123456789', '०१२३४५६७८९')
     gujarati = str.maketrans('0123456789', '૦૧૨૩૪૫૬૭૮૯')
     
-    if target_lang in ['हिन्दी (Hindi)', 'मराठी (Marathi)']:
-        return num_str.translate(devnagari)
-    elif target_lang == 'ગુજરાતી (Gujarati)':
-        return num_str.translate(gujarati)
+    if target_lang in ['हिन्दी (Hindi)', 'मराठी (Marathi)']: return num_str.translate(devnagari)
+    elif target_lang == 'ગુજરાતી (Gujarati)': return num_str.translate(gujarati)
     return num_str
 
 # --- DATA DICTIONARIES ---
@@ -54,7 +48,8 @@ crop_emojis = {
     'jute': '🌿', 'coffee': '☕'
 }
 
-mandi_prices = {
+# Kept solely as a fallback if the Government API is down or missing a key
+fallback_mandi_prices = {
     'rice': '₹ 2,200 - ₹ 2,400', 'maize': '₹ 2,000 - ₹ 2,100', 'chickpea': '₹ 5,300 - ₹ 5,500',
     'kidneybeans': '₹ 6,000 - ₹ 6,500', 'pigeonpeas': '₹ 6,800 - ₹ 7,200', 'mothbeans': '₹ 5,000 - ₹ 5,200',
     'mungbean': '₹ 7,000 - ₹ 7,500', 'blackgram': '₹ 6,500 - ₹ 7,000', 'lentil': '₹ 5,800 - ₹ 6,000',
@@ -88,7 +83,7 @@ except FileNotFoundError:
     st.error("Model file not found. Please run train.py first!")
     st.stop()
 
-# --- WEATHER API FUNCTIONS ---
+# --- REAL-TIME API FUNCTIONS ---
 def fetch_weather_by_coords(lat, lon):
     try:
         weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m"
@@ -109,6 +104,37 @@ def fetch_7_day_forecast(lat, lon):
         })
     except:
         return None
+
+def fetch_recent_rainfall(lat, lon):
+    """Fetches the sum of actual rainfall over the last 30 days using the live past_days API."""
+    try:
+        # Use the live forecast API with past_days=30 to avoid archive delay errors
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=precipitation_sum&past_days=30&forecast_days=1&timezone=auto"
+        data = requests.get(url).json()
+        
+        # Sum all precipitation data from the past 30 days
+        total_rain = sum(p for p in data['daily']['precipitation_sum'] if p is not None)
+        return round(total_rain, 1)
+    except:
+        return 100.0 # Safe fallback
+
+def fetch_live_mandi_price(crop_name):
+    """Fetches live prices from the Indian Gov API with a dictionary fallback."""
+    API_KEY = "579b464db66ec23bdd0000017676a56ae0a94c254cc568ba5d60d277" 
+    
+    try:
+        url = f"https://api.data.gov.in/resource/9ef84268-d588-465a-a308-a864a43d0070?api-key={API_KEY}&format=json&filters[commodity]={crop_name.capitalize()}"
+        response = requests.get(url).json()
+        
+        # Ensure we actually got records back from the government server
+        if response.get('records') and len(response['records']) > 0:
+            min_price = response['records'][0]['min_price']
+            max_price = response['records'][0]['max_price']
+            return f"₹ {min_price} - ₹ {max_price}"
+            
+        return fallback_mandi_prices.get(crop_name.lower(), 'Data Unavailable')
+    except Exception:
+        return fallback_mandi_prices.get(crop_name.lower(), 'Data Unavailable')
 
 def check_weather_alerts(forecast_df, lang):
     try:
@@ -136,6 +162,7 @@ with st.sidebar:
 
     if 'temp' not in st.session_state: st.session_state['temp'] = 25.0
     if 'hum' not in st.session_state: st.session_state['hum'] = 60.0
+    if 'rain' not in st.session_state: st.session_state['rain'] = 100.0
     if 'location_name' not in st.session_state: st.session_state['location_name'] = "Manual Entry"
 
     st.markdown(_t("**📍 Option 1: Use Live GPS**", lang_choice))
@@ -150,7 +177,6 @@ with st.sidebar:
         lat = st.session_state['locked_lat']
         lon = st.session_state['locked_lon']
         
-        # Translate Coordinates
         t_lat = _t_num(f"{lat:.2f}", lang_choice)
         t_lon = _t_num(f"{lon:.2f}", lang_choice)
         st.success(_t("GPS Locked:", lang_choice) + f" {t_lat}, {t_lon}")
@@ -160,6 +186,10 @@ with st.sidebar:
             if weather:
                 st.session_state['temp'], st.session_state['hum'] = weather[0], weather[1]
                 st.session_state['location_name'] = _t("GPS", lang_choice) + f" ({t_lat}, {t_lon})"
+                
+                # --- DYNAMIC RAINFALL TRIGGER ---
+                st.session_state['rain'] = fetch_recent_rainfall(lat, lon)
+                
                 st.session_state['forecast_df'] = fetch_7_day_forecast(lat, lon)
                 if st.session_state['forecast_df'] is not None:
                     st.session_state['alerts'] = check_weather_alerts(st.session_state['forecast_df'], lang_choice) 
@@ -178,6 +208,10 @@ with st.sidebar:
                 if weather:
                     st.session_state['temp'], st.session_state['hum'] = weather[0], weather[1]
                     st.session_state['location_name'] = _t(city, lang_choice)
+                    
+                    # --- DYNAMIC RAINFALL TRIGGER ---
+                    st.session_state['rain'] = fetch_recent_rainfall(c_lat, c_lon)
+                    
                     st.session_state['forecast_df'] = fetch_7_day_forecast(c_lat, c_lon)
                     if st.session_state['forecast_df'] is not None:
                         st.session_state['alerts'] = check_weather_alerts(st.session_state['forecast_df'], lang_choice)
@@ -189,7 +223,7 @@ with st.sidebar:
     st.subheader(_t("⛅ Climate Parameters", lang_choice))
     temperature = st.slider(_t("Temperature (°C)", lang_choice), 0.0, 50.0, float(st.session_state['temp']), 0.1)
     humidity = st.slider(_t("Humidity (%)", lang_choice), 0.0, 100.0, float(st.session_state['hum']), 0.1)
-    rainfall = st.slider(_t("Seasonal Rainfall (mm)", lang_choice), 0.0, 300.0, 100.0, 0.1)
+    rainfall = st.slider(_t("Seasonal Rainfall (mm)", lang_choice), 0.0, 300.0, float(st.session_state['rain']), 0.1)
 
     st.subheader(_t("🌱 Soil Nutrients", lang_choice))
     N = st.slider(_t("Nitrogen (N)", lang_choice), 0, 150, 50)
@@ -222,15 +256,13 @@ with tab1:
         
         main_crop = top_3_crops[0]
         emoji = crop_emojis.get(main_crop.lower(), '🌱')
-        
-        # TRANSLATE THE CROP NAME
         t_main_crop = _t(main_crop.capitalize(), lang_choice)
         
         st.success("## 🏆 " + _t("Primary Recommendation:", lang_choice) + f" {t_main_crop} {emoji}")
         
-        # TRANSLATE MARKET PRICES AND NUMBERS
-        raw_market_rate = mandi_prices.get(main_crop.lower(), 'Data Unavailable')
-        t_market_rate = _t_num(raw_market_rate, lang_choice) if raw_market_rate != 'Data Unavailable' else _t(raw_market_rate, lang_choice)
+        # --- DYNAMIC MARKET PRICE TRIGGER ---
+        raw_market_rate = fetch_live_mandi_price(main_crop)
+        t_market_rate = _t_num(raw_market_rate, lang_choice) if "₹" in raw_market_rate else _t(raw_market_rate, lang_choice)
         
         st.metric(label="📈 " + _t("Live Market Rate", lang_choice) + f" - {t_main_crop} " + _t("(per Quintal)", lang_choice), value=t_market_rate)
         
@@ -242,18 +274,14 @@ with tab1:
             prob_percent = round(prob * 100, 2)
             if prob_percent > 0:
                 c_icon = crop_emojis.get(crop.lower(), '🌱')
-                
-                # TRANSLATE SUB-CROPS AND CONFIDENCE PERCENTAGE
                 t_crop = _t(crop.capitalize(), lang_choice)
                 t_prob = _t_num(prob_percent, lang_choice)
-                
                 st.write(f"**{t_crop} {c_icon}** - {t_prob}% " + _t("Match", lang_choice))
                 st.progress(int(prob_percent))
 
 with tab2:
     st.markdown(_t("### 🌍 Environmental Profile", lang_choice))
     c1, c2, c3, c4 = st.columns(4)
-    # TRANSLATE METRIC NUMBERS
     c1.metric(_t("Nitrogen", lang_choice), _t_num(N, lang_choice))
     c2.metric(_t("Phosphorus", lang_choice), _t_num(P, lang_choice))
     c3.metric(_t("Potassium", lang_choice), _t_num(K, lang_choice))
@@ -280,7 +308,6 @@ with tab2:
             elif day_data['Rainfall'] > 0: weather_icon = "🌦️"
             elif day_data['Max Temp'] > 35: weather_icon = "🔥"
             
-            # TRANSLATE FORECAST NUMBERS
             t_max = _t_num(day_data['Max Temp'], lang_choice)
             t_min = _t_num(day_data['Min Temp'], lang_choice)
             t_rain = _t_num(day_data['Rainfall'], lang_choice)
@@ -296,7 +323,6 @@ with tab2:
     st.markdown(_t("### 📄 Enterprise Report Generation", lang_choice))
     
     if 'top_crop' in st.session_state and 'top_crops' in st.session_state and 'top_probs' in st.session_state:
-        # Ensure report reflects the translated crop name
         t_report_crop = _t(st.session_state['top_crops'][0].capitalize(), lang_choice)
         t_report_prob = round(st.session_state['top_probs'][0]*100, 2)
         
@@ -338,7 +364,6 @@ with tab3:
     if 'top_crop' in st.session_state and st.session_state['top_crop'] in crop_list:
         default_index = crop_list.index(st.session_state['top_crop'])
             
-    # TRANSLATE THE SELECTBOX OPTIONS
     affected_crop_eng = st.selectbox(_t("Select Affected Crop:", lang_choice), crop_list, index=default_index, format_func=lambda x: _t(x.capitalize(), lang_choice))
     t_affected_crop = _t(affected_crop_eng.capitalize(), lang_choice)
     
@@ -374,7 +399,6 @@ with tab3:
         financial_loss = expected_revenue * (damage_percent / 100.0)
         net_impact = expected_revenue - financial_loss - total_investment
 
-        # TRANSLATE FINANCIAL NUMBERS
         t_loss = _t_num(f"{financial_loss:,.2f}", lang_choice)
         t_inv = _t_num(f"{total_investment:,.2f}", lang_choice)
         t_rev = _t_num(f"{expected_revenue:,.2f}", lang_choice)
@@ -388,4 +412,3 @@ with tab3:
         c_net.metric(_t("Net After Damage", lang_choice), f"₹ {t_net}", delta=f"-₹ {t_loss}", delta_color="inverse")
 
         st.info("**" + _t("Insurance Next Steps:", lang_choice) + "** " + _t("Export this data along with timestamped photos of the field to your local agriculture officer or crop insurance portal within 72 hours of the disaster event.", lang_choice))
-        
