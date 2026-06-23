@@ -19,7 +19,6 @@ api_lang_codes = {
     'ગુજરાતી (Gujarati)': 'gu'
 }
 
-# The @st.cache_data decorator saves the translation so the app doesn't slow down when moving sliders!
 @st.cache_data(show_spinner=False)
 def _t(text, target_lang):
     """Translates text dynamically and caches the result for speed."""
@@ -29,7 +28,21 @@ def _t(text, target_lang):
         lang_code = api_lang_codes.get(target_lang, 'en')
         return GoogleTranslator(source='auto', target=lang_code).translate(text)
     except Exception:
-        return text # Fallback to English if the API fails
+        return text 
+
+def _t_num(num_str, target_lang):
+    """Instantly converts numbers to native digits without API lag."""
+    num_str = str(num_str)
+    if target_lang == 'English': return num_str
+    
+    devnagari = str.maketrans('0123456789', '०१२३४५६७८९')
+    gujarati = str.maketrans('0123456789', '૦૧૨૩૪૫૬૭૮૯')
+    
+    if target_lang in ['हिन्दी (Hindi)', 'मराठी (Marathi)']:
+        return num_str.translate(devnagari)
+    elif target_lang == 'ગુજરાતી (Gujarati)':
+        return num_str.translate(gujarati)
+    return num_str
 
 # --- DATA DICTIONARIES ---
 crop_emojis = {
@@ -136,13 +149,17 @@ with st.sidebar:
     if 'locked_lat' in st.session_state:
         lat = st.session_state['locked_lat']
         lon = st.session_state['locked_lon']
-        st.success(_t(f"GPS Locked: {lat:.2f}, {lon:.2f}", lang_choice))
+        
+        # Translate Coordinates
+        t_lat = _t_num(f"{lat:.2f}", lang_choice)
+        t_lon = _t_num(f"{lon:.2f}", lang_choice)
+        st.success(_t("GPS Locked:", lang_choice) + f" {t_lat}, {t_lon}")
         
         if st.button(_t("Fetch Weather for My GPS", lang_choice), type="primary", use_container_width=True):
             weather = fetch_weather_by_coords(lat, lon)
             if weather:
                 st.session_state['temp'], st.session_state['hum'] = weather[0], weather[1]
-                st.session_state['location_name'] = f"GPS ({lat:.2f}, {lon:.2f})"
+                st.session_state['location_name'] = _t("GPS", lang_choice) + f" ({t_lat}, {t_lon})"
                 st.session_state['forecast_df'] = fetch_7_day_forecast(lat, lon)
                 if st.session_state['forecast_df'] is not None:
                     st.session_state['alerts'] = check_weather_alerts(st.session_state['forecast_df'], lang_choice) 
@@ -160,7 +177,7 @@ with st.sidebar:
                 weather = fetch_weather_by_coords(c_lat, c_lon)
                 if weather:
                     st.session_state['temp'], st.session_state['hum'] = weather[0], weather[1]
-                    st.session_state['location_name'] = city
+                    st.session_state['location_name'] = _t(city, lang_choice)
                     st.session_state['forecast_df'] = fetch_7_day_forecast(c_lat, c_lon)
                     if st.session_state['forecast_df'] is not None:
                         st.session_state['alerts'] = check_weather_alerts(st.session_state['forecast_df'], lang_choice)
@@ -206,10 +223,16 @@ with tab1:
         main_crop = top_3_crops[0]
         emoji = crop_emojis.get(main_crop.lower(), '🌱')
         
-        st.success("## 🏆 " + _t("Primary Recommendation", lang_choice) + f": {main_crop.capitalize()} {emoji}")
+        # TRANSLATE THE CROP NAME
+        t_main_crop = _t(main_crop.capitalize(), lang_choice)
         
-        market_rate = mandi_prices.get(main_crop.lower(), 'Data Unavailable')
-        st.metric(label="📈 " + _t("Live Market Rate", lang_choice) + f" - {main_crop.capitalize()} " + _t("(per Quintal)", lang_choice), value=market_rate)
+        st.success("## 🏆 " + _t("Primary Recommendation:", lang_choice) + f" {t_main_crop} {emoji}")
+        
+        # TRANSLATE MARKET PRICES AND NUMBERS
+        raw_market_rate = mandi_prices.get(main_crop.lower(), 'Data Unavailable')
+        t_market_rate = _t_num(raw_market_rate, lang_choice) if raw_market_rate != 'Data Unavailable' else _t(raw_market_rate, lang_choice)
+        
+        st.metric(label="📈 " + _t("Live Market Rate", lang_choice) + f" - {t_main_crop} " + _t("(per Quintal)", lang_choice), value=t_market_rate)
         
         raw_note = crop_wiki.get(main_crop.lower(), "Standard care required.")
         st.info("**📖 " + _t("Expert Note:", lang_choice) + "**\n\n" + _t(raw_note, lang_choice))
@@ -219,21 +242,27 @@ with tab1:
             prob_percent = round(prob * 100, 2)
             if prob_percent > 0:
                 c_icon = crop_emojis.get(crop.lower(), '🌱')
-                st.write(f"**{crop.capitalize()} {c_icon}** - {prob_percent}% " + _t("Match", lang_choice))
+                
+                # TRANSLATE SUB-CROPS AND CONFIDENCE PERCENTAGE
+                t_crop = _t(crop.capitalize(), lang_choice)
+                t_prob = _t_num(prob_percent, lang_choice)
+                
+                st.write(f"**{t_crop} {c_icon}** - {t_prob}% " + _t("Match", lang_choice))
                 st.progress(int(prob_percent))
 
 with tab2:
     st.markdown(_t("### 🌍 Environmental Profile", lang_choice))
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric(_t("Nitrogen", lang_choice), N)
-    c2.metric(_t("Phosphorus", lang_choice), P)
-    c3.metric(_t("Potassium", lang_choice), K)
-    c4.metric(_t("Soil pH", lang_choice), ph)
+    # TRANSLATE METRIC NUMBERS
+    c1.metric(_t("Nitrogen", lang_choice), _t_num(N, lang_choice))
+    c2.metric(_t("Phosphorus", lang_choice), _t_num(P, lang_choice))
+    c3.metric(_t("Potassium", lang_choice), _t_num(K, lang_choice))
+    c4.metric(_t("Soil pH", lang_choice), _t_num(ph, lang_choice))
     
     c5, c6, c7 = st.columns(3)
-    c5.metric(_t("Current Temp", lang_choice), f"{temperature} °C")
-    c6.metric(_t("Humidity", lang_choice), f"{humidity} %")
-    c7.metric(_t("Seasonal Rain", lang_choice), f"{rainfall} mm")
+    c5.metric(_t("Current Temp", lang_choice), _t_num(temperature, lang_choice) + " °C")
+    c6.metric(_t("Humidity", lang_choice), _t_num(humidity, lang_choice) + " %")
+    c7.metric(_t("Seasonal Rain", lang_choice), _t_num(rainfall, lang_choice) + " mm")
     
     st.divider()
     
@@ -244,7 +273,6 @@ with tab2:
         for i, col in enumerate(days):
             day_data = st.session_state['forecast_df'].iloc[i]
             date_obj = datetime.strptime(day_data['Date'], "%Y-%m-%d")
-            # Translate the day string (e.g., "Mon, Jun 22")
             day_str = _t(date_obj.strftime("%a, %b %d"), lang_choice)
             
             weather_icon = "☀️"
@@ -252,10 +280,15 @@ with tab2:
             elif day_data['Rainfall'] > 0: weather_icon = "🌦️"
             elif day_data['Max Temp'] > 35: weather_icon = "🔥"
             
+            # TRANSLATE FORECAST NUMBERS
+            t_max = _t_num(day_data['Max Temp'], lang_choice)
+            t_min = _t_num(day_data['Min Temp'], lang_choice)
+            t_rain = _t_num(day_data['Rainfall'], lang_choice)
+            
             with col:
                 st.markdown(f"**{day_str}**")
                 st.markdown(f"<h2 style='text-align: center; margin: 0;'>{weather_icon}</h2>", unsafe_allow_html=True)
-                st.markdown(f"<div style='text-align: center;'>🔺 {day_data['Max Temp']}°C<br>🔻 {day_data['Min Temp']}°C<br>💧 {day_data['Rainfall']}mm</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align: center;'>🔺 {t_max}°C<br>🔻 {t_min}°C<br>💧 {t_rain}mm</div>", unsafe_allow_html=True)
     else:
         st.info(_t("👈 Please use the sidebar to fetch weather data for your location to see the forecast.", lang_choice))
     
@@ -263,6 +296,10 @@ with tab2:
     st.markdown(_t("### 📄 Enterprise Report Generation", lang_choice))
     
     if 'top_crop' in st.session_state and 'top_crops' in st.session_state and 'top_probs' in st.session_state:
+        # Ensure report reflects the translated crop name
+        t_report_crop = _t(st.session_state['top_crops'][0].capitalize(), lang_choice)
+        t_report_prob = round(st.session_state['top_probs'][0]*100, 2)
+        
         report_text = f"""=========================================
 AGRISMART PRO - OFFICIAL FARM REPORT
 =========================================
@@ -281,7 +318,7 @@ Location Context: {st.session_state['location_name']}
 
 2. AI RECOMMENDATIONS:
 ----------------------
-Primary Crop: {st.session_state['top_crops'][0].capitalize()} ({round(st.session_state['top_probs'][0]*100, 2)}% Confidence)
+Primary Crop: {t_report_crop} ({t_report_prob}% Confidence)
 ========================================="""
         st.download_button(label="💾 " + _t("Download Official Farm Report (.txt)", lang_choice), data=report_text, file_name="Farm_Report.txt", mime="text/plain", type="primary")
     else:
@@ -291,11 +328,9 @@ with tab3:
     st.markdown(_t("### 🆘 Disaster Mitigation & Crop Salvage", lang_choice))
     
     disaster_options = ["Flood / Waterlogging", "Severe Drought", "Pest Swarm", "Frost / Extreme Cold"]
-    # Translate the options for the dropdown display, but keep track of the English original for logic
     translated_disasters = [_t(d, lang_choice) for d in disaster_options]
     
     selected_translated_disaster = st.selectbox(_t("Select Disaster Event:", lang_choice), translated_disasters)
-    # Get the original English disaster string back for our logic below
     disaster_type = disaster_options[translated_disasters.index(selected_translated_disaster)]
     
     crop_list = list(crop_emojis.keys())
@@ -303,10 +338,12 @@ with tab3:
     if 'top_crop' in st.session_state and st.session_state['top_crop'] in crop_list:
         default_index = crop_list.index(st.session_state['top_crop'])
             
-    affected_crop = st.selectbox(_t("Select Affected Crop:", lang_choice), crop_list, index=default_index, format_func=lambda x: _t(x.capitalize(), lang_choice))
+    # TRANSLATE THE SELECTBOX OPTIONS
+    affected_crop_eng = st.selectbox(_t("Select Affected Crop:", lang_choice), crop_list, index=default_index, format_func=lambda x: _t(x.capitalize(), lang_choice))
+    t_affected_crop = _t(affected_crop_eng.capitalize(), lang_choice)
     
     if st.button(_t("Get Mitigation Protocol 🚑", lang_choice), type="primary"):
-        st.warning("**" + _t("Emergency Protocol for", lang_choice) + f" {_t(affected_crop.capitalize(), lang_choice)} " + _t("during", lang_choice) + f" {_t(disaster_type, lang_choice)}:**")
+        st.warning("**" + _t("Emergency Protocol for", lang_choice) + f" {t_affected_crop} " + _t("during", lang_choice) + f" {_t(disaster_type, lang_choice)}:**")
         if disaster_type == "Flood / Waterlogging":
             st.write(_t("1. **Drainage:** Immediately dig lateral trenches to drain standing water within 48 hours.", lang_choice))
             st.write(_t("2. **Disease Control:** Apply a broad-spectrum copper-based fungicide to prevent root rot.", lang_choice))
@@ -337,11 +374,18 @@ with tab3:
         financial_loss = expected_revenue * (damage_percent / 100.0)
         net_impact = expected_revenue - financial_loss - total_investment
 
-        st.error("#### " + _t("Estimated Financial Loss:", lang_choice) + f" ₹ {financial_loss:,.2f}")
+        # TRANSLATE FINANCIAL NUMBERS
+        t_loss = _t_num(f"{financial_loss:,.2f}", lang_choice)
+        t_inv = _t_num(f"{total_investment:,.2f}", lang_choice)
+        t_rev = _t_num(f"{expected_revenue:,.2f}", lang_choice)
+        t_net = _t_num(f"{net_impact:,.2f}", lang_choice)
+
+        st.error("#### " + _t("Estimated Financial Loss:", lang_choice) + f" ₹ {t_loss}")
 
         c_inv, c_rev, c_net = st.columns(3)
-        c_inv.metric(_t("Total Investment", lang_choice), f"₹ {total_investment:,.2f}")
-        c_rev.metric(_t("Expected Revenue", lang_choice), f"₹ {expected_revenue:,.2f}")
-        c_net.metric(_t("Net After Damage", lang_choice), f"₹ {net_impact:,.2f}", delta=f"-₹ {financial_loss:,.2f}", delta_color="inverse")
+        c_inv.metric(_t("Total Investment", lang_choice), f"₹ {t_inv}")
+        c_rev.metric(_t("Expected Revenue", lang_choice), f"₹ {t_rev}")
+        c_net.metric(_t("Net After Damage", lang_choice), f"₹ {t_net}", delta=f"-₹ {t_loss}", delta_color="inverse")
 
         st.info("**" + _t("Insurance Next Steps:", lang_choice) + "** " + _t("Export this data along with timestamped photos of the field to your local agriculture officer or crop insurance portal within 72 hours of the disaster event.", lang_choice))
+        
